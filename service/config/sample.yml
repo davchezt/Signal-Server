@@ -78,17 +78,6 @@ twilio: # Twilio gateway configuration
   androidAppHash: example # Hash appended to Android
   verifyServiceFriendlyName: example # Service name used in template. Requires Twilio account rep to enable
 
-push:
-  queueSize: 1000 # Size of push pending queue
-
-turn: # TURN server configuration
-  secret: example # TURN server secret
-  uris:
-    - stun:example.com:80
-    - stun:another.example.com:443
-    - turn:example.com:443?transport=udp
-    - turn:ya.example.com:80?transport=udp
-
 cacheCluster: # Redis server configuration for cache cluster
   configurationUri: redis://redis.example.com:6379/
 
@@ -243,11 +232,6 @@ voiceVerification:
     - en
 
 recaptcha:
-  secret: unset
-
-recaptchaV2:
-  siteKey: unset
-  scoreFloor: 1.0
   projectPath: projects/example
   credentialConfigurationJson: "{ }" # service account configuration for backend authentication
 

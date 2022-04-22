@@ -1,21 +1,24 @@
 /*
- * Copyright 2013-2020 Signal Messenger, LLC
+ * Copyright 2021-2022 Signal Messenger, LLC
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
 package org.whispersystems.textsecuregcm.configuration;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
 import javax.validation.constraints.NotEmpty;
 
 public class RecaptchaConfiguration {
 
-  @JsonProperty
-  @NotEmpty
-  private String secret;
+  private String projectPath;
+  private String credentialConfigurationJson;
 
-  public String getSecret() {
-    return secret;
+  @NotEmpty
+  public String getProjectPath() {
+    return projectPath;
   }
 
+  @NotEmpty
+  public String getCredentialConfigurationJson() {
+    return credentialConfigurationJson;
+  }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2013-2021 Signal Messenger, LLC
+ * Copyright 2013-2022 Signal Messenger, LLC
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 package org.whispersystems.textsecuregcm.storage;
@@ -194,6 +194,7 @@ public class AccountsManager {
         if (!originalUuid.equals(actualUuid)) {
           messagesManager.clear(actualUuid);
           keys.delete(actualUuid);
+          keys.delete(account.getPhoneNumberIdentifier());
           profilesManager.deleteAll(actualUuid);
         }
 
@@ -221,6 +222,7 @@ public class AccountsManager {
 
   public Account changeNumber(final Account account, final String number) throws InterruptedException {
     final String originalNumber = account.getNumber();
+    final UUID originalPhoneNumberIdentifier = account.getPhoneNumberIdentifier();
 
     if (originalNumber.equals(number)) {
       return account;
@@ -228,7 +230,7 @@ public class AccountsManager {
 
     final AtomicReference<Account> updatedAccount = new AtomicReference<>();
 
-    deletedAccountsManager.lockAndPut(account.getNumber(), number, () -> {
+    deletedAccountsManager.lockAndPut(account.getNumber(), number, (originalAci, deletedAci) -> {
       redisDelete(account);
 
       final Optional<Account> maybeExistingAccount = getByE164(number);
@@ -236,9 +238,10 @@ public class AccountsManager {
 
       if (maybeExistingAccount.isPresent()) {
         delete(maybeExistingAccount.get());
+        directoryQueue.deleteAccount(maybeExistingAccount.get());
         displacedUuid = maybeExistingAccount.map(Account::getUuid);
       } else {
-        displacedUuid = Optional.empty();
+        displacedUuid = deletedAci;
       }
 
       final UUID uuid = account.getUuid();
@@ -259,6 +262,9 @@ public class AccountsManager {
 
       updatedAccount.set(numberChangedAccount);
       directoryQueue.changePhoneNumber(numberChangedAccount, originalNumber, number);
+
+      keys.delete(phoneNumberIdentifier);
+      keys.delete(originalPhoneNumberIdentifier);
 
       return displacedUuid;
     });
@@ -505,6 +511,14 @@ public class AccountsManager {
 
       return account;
     }
+  }
+
+  public Optional<String> getNumberForPhoneNumberIdentifier(UUID pni) {
+    return phoneNumberIdentifiers.getPhoneNumber(pni);
+  }
+
+  public UUID getPhoneNumberIdentifier(String e164) {
+    return phoneNumberIdentifiers.getPhoneNumberIdentifier(e164);
   }
 
   public AccountCrawlChunk getAllFromDynamo(int length) {

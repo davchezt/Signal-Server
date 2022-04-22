@@ -1,18 +1,26 @@
 /*
- * Copyright 2021 Signal Messenger, LLC
+ * Copyright 2021-2022 Signal Messenger, LLC
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
 package org.whispersystems.textsecuregcm.controllers;
 
+import static org.whispersystems.textsecuregcm.metrics.MetricsUtil.name;
+
 import com.codahale.metrics.annotation.Timed;
 import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonInclude.Include;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.base.Strings;
+import com.stripe.model.Charge;
+import com.stripe.model.Charge.Outcome;
 import com.stripe.model.Invoice;
 import com.stripe.model.InvoiceLineItem;
 import com.stripe.model.Subscription;
 import io.dropwizard.auth.Auth;
+import io.micrometer.core.instrument.Metrics;
+import io.micrometer.core.instrument.Tags;
 import java.math.BigDecimal;
 import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
@@ -35,6 +43,7 @@ import javax.crypto.spec.SecretKeySpec;
 import javax.validation.Valid;
 import javax.validation.constraints.Min;
 import javax.validation.constraints.NotEmpty;
+import javax.validation.constraints.NotNull;
 import javax.ws.rs.BadRequestException;
 import javax.ws.rs.Consumes;
 import javax.ws.rs.DELETE;
@@ -51,15 +60,16 @@ import javax.ws.rs.Produces;
 import javax.ws.rs.WebApplicationException;
 import javax.ws.rs.container.ContainerRequestContext;
 import javax.ws.rs.core.Context;
+import javax.ws.rs.core.HttpHeaders;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 import javax.ws.rs.core.Response.Status;
 import org.apache.commons.lang3.StringUtils;
-import org.signal.zkgroup.InvalidInputException;
-import org.signal.zkgroup.VerificationFailedException;
-import org.signal.zkgroup.receipts.ReceiptCredentialRequest;
-import org.signal.zkgroup.receipts.ReceiptCredentialResponse;
-import org.signal.zkgroup.receipts.ServerZkReceiptOperations;
+import org.signal.libsignal.zkgroup.InvalidInputException;
+import org.signal.libsignal.zkgroup.VerificationFailedException;
+import org.signal.libsignal.zkgroup.receipts.ReceiptCredentialRequest;
+import org.signal.libsignal.zkgroup.receipts.ReceiptCredentialResponse;
+import org.signal.libsignal.zkgroup.receipts.ServerZkReceiptOperations;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.whispersystems.textsecuregcm.auth.AuthenticatedAccount;
@@ -70,6 +80,7 @@ import org.whispersystems.textsecuregcm.configuration.SubscriptionConfiguration;
 import org.whispersystems.textsecuregcm.configuration.SubscriptionLevelConfiguration;
 import org.whispersystems.textsecuregcm.configuration.SubscriptionPriceConfiguration;
 import org.whispersystems.textsecuregcm.entities.Badge;
+import org.whispersystems.textsecuregcm.metrics.UserAgentTagUtil;
 import org.whispersystems.textsecuregcm.storage.IssuedReceiptsManager;
 import org.whispersystems.textsecuregcm.storage.SubscriptionManager;
 import org.whispersystems.textsecuregcm.storage.SubscriptionManager.GetResult;
@@ -90,6 +101,8 @@ public class SubscriptionController {
   private final IssuedReceiptsManager issuedReceiptsManager;
   private final BadgeTranslator badgeTranslator;
   private final LevelTranslator levelTranslator;
+
+  private static final String INVALID_ACCEPT_LANGUAGE_COUNTER_NAME = name(SubscriptionController.class, "invalidAcceptLanguage");
 
   public SubscriptionController(
       @Nonnull Clock clock,
@@ -115,7 +128,6 @@ public class SubscriptionController {
   @Timed
   @DELETE
   @Path("/{subscriberId}")
-  @Consumes(MediaType.APPLICATION_JSON)
   @Produces(MediaType.APPLICATION_JSON)
   public CompletableFuture<Response> deleteSubscriber(
       @Auth Optional<AuthenticatedAccount> authenticatedAccount,
@@ -394,7 +406,6 @@ public class SubscriptionController {
   @Timed
   @GET
   @Path("/levels")
-  @Consumes(MediaType.APPLICATION_JSON)
   @Produces(MediaType.APPLICATION_JSON)
   public CompletableFuture<Response> getLevels(@Context ContainerRequestContext containerRequestContext) {
     return CompletableFuture.supplyAsync(() -> {
@@ -442,7 +453,6 @@ public class SubscriptionController {
   @Timed
   @GET
   @Path("/boost/badges")
-  @Consumes(MediaType.APPLICATION_JSON)
   @Produces(MediaType.APPLICATION_JSON)
   public CompletableFuture<Response> getBoostBadges(@Context ContainerRequestContext containerRequestContext) {
     return CompletableFuture.supplyAsync(() -> {
@@ -458,7 +468,6 @@ public class SubscriptionController {
   @Timed
   @GET
   @Path("/boost/amounts")
-  @Consumes(MediaType.APPLICATION_JSON)
   @Produces(MediaType.APPLICATION_JSON)
   public CompletableFuture<Response> getBoostAmounts() {
     return CompletableFuture.supplyAsync(() -> Response.ok(
@@ -511,7 +520,7 @@ public class SubscriptionController {
   @Path("/boost/create")
   @Consumes(MediaType.APPLICATION_JSON)
   @Produces(MediaType.APPLICATION_JSON)
-  public CompletableFuture<Response> createBoostPaymentIntent(CreateBoostRequest request) {
+  public CompletableFuture<Response> createBoostPaymentIntent(@NotNull @Valid CreateBoostRequest request) {
     return stripeManager.createPaymentIntent(request.getCurrency(), request.getAmount())
         .thenApply(paymentIntent -> Response.ok(new CreateBoostResponse(paymentIntent.getClientSecret())).build());
   }
@@ -529,10 +538,12 @@ public class SubscriptionController {
       this.receiptCredentialRequest = receiptCredentialRequest;
     }
 
+    @NotNull
     public String getPaymentIntentId() {
       return paymentIntentId;
     }
 
+    @NotNull
     public byte[] getReceiptCredentialRequest() {
       return receiptCredentialRequest;
     }
@@ -558,7 +569,7 @@ public class SubscriptionController {
   @Path("/boost/receipt_credentials")
   @Consumes(MediaType.APPLICATION_JSON)
   @Produces(MediaType.APPLICATION_JSON)
-  public CompletableFuture<Response> createBoostReceiptCredentials(CreateBoostReceiptCredentialsRequest request) {
+  public CompletableFuture<Response> createBoostReceiptCredentials(@NotNull @Valid CreateBoostReceiptCredentialsRequest request) {
     return stripeManager.getPaymentIntent(request.getPaymentIntentId())
         .thenCompose(paymentIntent -> {
           if (paymentIntent == null) {
@@ -608,6 +619,7 @@ public class SubscriptionController {
       private final BigDecimal amount;
       private final String status;
 
+      @JsonCreator
       public Subscription(
           @JsonProperty("level") long level,
           @JsonProperty("billingCycleAnchor") Instant billingCycleAnchor,
@@ -660,23 +672,72 @@ public class SubscriptionController {
       }
     }
 
+    public static class ChargeFailure {
+      private final String code;
+      private final String message;
+      private final String outcomeNetworkStatus;
+      private final String outcomeReason;
+      private final String outcomeType;
+
+      @JsonCreator
+      public ChargeFailure(
+          @JsonProperty("code") String code,
+          @JsonProperty("message") String message,
+          @JsonProperty("outcomeNetworkStatus") String outcomeNetworkStatus,
+          @JsonProperty("outcomeReason") String outcomeReason,
+          @JsonProperty("outcomeType") String outcomeType) {
+        this.code = code;
+        this.message = message;
+        this.outcomeNetworkStatus = outcomeNetworkStatus;
+        this.outcomeReason = outcomeReason;
+        this.outcomeType = outcomeType;
+      }
+
+      public String getCode() {
+        return code;
+      }
+
+      public String getMessage() {
+        return message;
+      }
+
+      public String getOutcomeNetworkStatus() {
+        return outcomeNetworkStatus;
+      }
+
+      public String getOutcomeReason() {
+        return outcomeReason;
+      }
+
+      public String getOutcomeType() {
+        return outcomeType;
+      }
+    }
+
     private final Subscription subscription;
+    private final ChargeFailure chargeFailure;
 
     @JsonCreator
     public GetSubscriptionInformationResponse(
-        @JsonProperty("subscription") Subscription subscription) {
+        @JsonProperty("subscription") Subscription subscription,
+        @JsonProperty("chargeFailure") ChargeFailure chargeFailure) {
       this.subscription = subscription;
+      this.chargeFailure = chargeFailure;
     }
 
     public Subscription getSubscription() {
       return subscription;
+    }
+
+    @JsonInclude(Include.NON_NULL)
+    public ChargeFailure getChargeFailure() {
+      return chargeFailure;
     }
   }
 
   @Timed
   @GET
   @Path("/{subscriberId}")
-  @Consumes(MediaType.APPLICATION_JSON)
   @Produces(MediaType.APPLICATION_JSON)
   public CompletableFuture<Response> getSubscriptionInformation(
       @Auth Optional<AuthenticatedAccount> authenticatedAccount,
@@ -686,21 +747,37 @@ public class SubscriptionController {
         .thenApply(this::requireRecordFromGetResult)
         .thenCompose(record -> {
           if (record.subscriptionId == null) {
-            return CompletableFuture.completedFuture(Response.ok(new GetSubscriptionInformationResponse(null)).build());
+            return CompletableFuture.completedFuture(Response.ok(new GetSubscriptionInformationResponse(null, null)).build());
           }
           return stripeManager.getSubscription(record.subscriptionId).thenCompose(subscription ->
               stripeManager.getPriceForSubscription(subscription).thenCompose(price ->
-                  stripeManager.getLevelForPrice(price).thenApply(level -> Response.ok(
-                      new GetSubscriptionInformationResponse(new GetSubscriptionInformationResponse.Subscription(
-                          level,
-                          Instant.ofEpochSecond(subscription.getBillingCycleAnchor()),
-                          Instant.ofEpochSecond(subscription.getCurrentPeriodEnd()),
-                          Objects.equals(subscription.getStatus(), "active"),
-                          subscription.getCancelAtPeriodEnd(),
-                          price.getCurrency().toUpperCase(Locale.ROOT),
-                          price.getUnitAmountDecimal(),
-                          subscription.getStatus()
-                      ))).build())));
+                  stripeManager.getLevelForPrice(price).thenApply(level -> {
+                    GetSubscriptionInformationResponse.ChargeFailure chargeFailure = null;
+                    if (subscription.getLatestInvoiceObject() != null && subscription.getLatestInvoiceObject().getChargeObject() != null &&
+                        (subscription.getLatestInvoiceObject().getChargeObject().getFailureCode() != null || subscription.getLatestInvoiceObject().getChargeObject().getFailureMessage() != null)) {
+                      Charge charge = subscription.getLatestInvoiceObject().getChargeObject();
+                      Outcome outcome = charge.getOutcome();
+                      chargeFailure = new GetSubscriptionInformationResponse.ChargeFailure(
+                          charge.getFailureCode(),
+                          charge.getFailureMessage(),
+                          outcome != null ? outcome.getNetworkStatus() : null,
+                          outcome != null ? outcome.getReason() : null,
+                          outcome != null ? outcome.getType() : null);
+                    }
+                    return Response.ok(
+                        new GetSubscriptionInformationResponse(
+                            new GetSubscriptionInformationResponse.Subscription(
+                                level,
+                                Instant.ofEpochSecond(subscription.getBillingCycleAnchor()),
+                                Instant.ofEpochSecond(subscription.getCurrentPeriodEnd()),
+                                Objects.equals(subscription.getStatus(), "active"),
+                                subscription.getCancelAtPeriodEnd(),
+                                price.getCurrency().toUpperCase(Locale.ROOT),
+                                price.getUnitAmountDecimal(),
+                                subscription.getStatus()),
+                            chargeFailure
+                        )).build();
+                  })));
         });
   }
 
@@ -714,7 +791,7 @@ public class SubscriptionController {
       this.receiptCredentialRequest = receiptCredentialRequest;
     }
 
-    @ExactlySize(ReceiptCredentialRequest.SIZE)
+    @NotEmpty
     public byte[] getReceiptCredentialRequest() {
       return receiptCredentialRequest;
     }
@@ -730,7 +807,7 @@ public class SubscriptionController {
       this.receiptCredentialResponse = receiptCredentialResponse;
     }
 
-    @ExactlySize(ReceiptCredentialResponse.SIZE)
+    @NotEmpty
     public byte[] getReceiptCredentialResponse() {
       return receiptCredentialResponse;
     }
@@ -744,7 +821,7 @@ public class SubscriptionController {
   public CompletableFuture<Response> createSubscriptionReceiptCredentials(
       @Auth Optional<AuthenticatedAccount> authenticatedAccount,
       @PathParam("subscriberId") String subscriberId,
-      @Valid GetReceiptCredentialsRequest request) {
+      @NotNull @Valid GetReceiptCredentialsRequest request) {
     RequestData requestData = RequestData.process(authenticatedAccount, subscriberId, clock);
     return subscriptionManager.get(requestData.subscriberUser, requestData.hmac)
         .thenApply(this::requireRecordFromGetResult)
@@ -855,7 +932,13 @@ public class SubscriptionController {
     try {
       return containerRequestContext.getAcceptableLanguages();
     } catch (final ProcessingException e) {
-      logger.warn("Could not get acceptable languages", e);
+      final String userAgent = containerRequestContext.getHeaderString(HttpHeaders.USER_AGENT);
+      Metrics.counter(INVALID_ACCEPT_LANGUAGE_COUNTER_NAME, Tags.of(UserAgentTagUtil.getPlatformTag(userAgent))).increment();
+      logger.debug("Could not get acceptable languages; Accept-Language: {}; User-Agent: {}",
+          containerRequestContext.getHeaderString(HttpHeaders.ACCEPT_LANGUAGE),
+          userAgent,
+          e);
+
       return List.of();
     }
   }

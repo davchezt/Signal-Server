@@ -38,6 +38,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import javax.annotation.Nonnull;
 import javax.validation.Valid;
+import javax.validation.constraints.NotNull;
 import javax.ws.rs.BadRequestException;
 import javax.ws.rs.Consumes;
 import javax.ws.rs.DELETE;
@@ -62,6 +63,7 @@ import org.whispersystems.textsecuregcm.auth.CombinedUnidentifiedSenderAccessKey
 import org.whispersystems.textsecuregcm.auth.OptionalAccess;
 import org.whispersystems.textsecuregcm.entities.AccountMismatchedDevices;
 import org.whispersystems.textsecuregcm.entities.AccountStaleDevices;
+import org.whispersystems.textsecuregcm.entities.IncomingDeviceMessage;
 import org.whispersystems.textsecuregcm.entities.IncomingMessage;
 import org.whispersystems.textsecuregcm.entities.IncomingMessageList;
 import org.whispersystems.textsecuregcm.entities.MessageProtos.Envelope;
@@ -77,6 +79,7 @@ import org.whispersystems.textsecuregcm.entities.StaleDevices;
 import org.whispersystems.textsecuregcm.limits.RateLimitChallengeException;
 import org.whispersystems.textsecuregcm.limits.RateLimiters;
 import org.whispersystems.textsecuregcm.metrics.UserAgentTagUtil;
+import org.whispersystems.textsecuregcm.providers.MultiDeviceMessageListProvider;
 import org.whispersystems.textsecuregcm.providers.MultiRecipientMessageProvider;
 import org.whispersystems.textsecuregcm.push.ApnFallbackManager;
 import org.whispersystems.textsecuregcm.push.MessageSender;
@@ -85,9 +88,11 @@ import org.whispersystems.textsecuregcm.push.ReceiptSender;
 import org.whispersystems.textsecuregcm.redis.RedisOperation;
 import org.whispersystems.textsecuregcm.storage.Account;
 import org.whispersystems.textsecuregcm.storage.AccountsManager;
+import org.whispersystems.textsecuregcm.storage.DeletedAccountsManager;
 import org.whispersystems.textsecuregcm.storage.Device;
 import org.whispersystems.textsecuregcm.storage.MessagesManager;
 import org.whispersystems.textsecuregcm.storage.ReportMessageManager;
+import org.whispersystems.textsecuregcm.util.MessageValidation;
 import org.whispersystems.textsecuregcm.util.Pair;
 import org.whispersystems.textsecuregcm.util.Util;
 import org.whispersystems.textsecuregcm.util.ua.ClientPlatform;
@@ -102,14 +107,15 @@ public class MessageController {
 
   private static final Logger logger = LoggerFactory.getLogger(MessageController.class);
 
-  private final RateLimiters                rateLimiters;
-  private final MessageSender               messageSender;
-  private final ReceiptSender               receiptSender;
-  private final AccountsManager             accountsManager;
-  private final MessagesManager             messagesManager;
-  private final ApnFallbackManager          apnFallbackManager;
-  private final ReportMessageManager        reportMessageManager;
-  private final ExecutorService             multiRecipientMessageExecutor;
+  private final RateLimiters rateLimiters;
+  private final MessageSender messageSender;
+  private final ReceiptSender receiptSender;
+  private final AccountsManager accountsManager;
+  private final DeletedAccountsManager deletedAccountsManager;
+  private final MessagesManager messagesManager;
+  private final ApnFallbackManager apnFallbackManager;
+  private final ReportMessageManager reportMessageManager;
+  private final ExecutorService multiRecipientMessageExecutor;
 
   @VisibleForTesting
   static final Semver FIRST_IOS_VERSION_WITH_INCORRECT_ENVELOPE_TYPE = new Semver("5.22.0");
@@ -123,23 +129,27 @@ public class MessageController {
   private static final String CONTENT_SIZE_DISTRIBUTION_NAME = name(MessageController.class, "messageContentSize");
   private static final String OUTGOING_MESSAGE_LIST_SIZE_BYTES_DISTRIBUTION_NAME = name(MessageController.class, "outgoingMessageListSizeBytes");
   private static final String RATE_LIMITED_MESSAGE_COUNTER_NAME = name(MessageController.class, "rateLimitedMessage");
+  private static final String REJECT_INVALID_ENVELOPE_TYPE = name(MessageController.class, "rejectInvalidEnvelopeType");
 
   private static final String EPHEMERAL_TAG_NAME = "ephemeral";
   private static final String SENDER_TYPE_TAG_NAME = "senderType";
   private static final String SENDER_COUNTRY_TAG_NAME = "senderCountry";
   private static final String RATE_LIMIT_REASON_TAG_NAME = "rateLimitReason";
+  private static final String ENVELOPE_TYPE_TAG_NAME = "envelopeType";
 
   private static final String SENDER_TYPE_IDENTIFIED = "identified";
   private static final String SENDER_TYPE_UNIDENTIFIED = "unidentified";
   private static final String SENDER_TYPE_SELF = "self";
 
-  private static final long MAX_MESSAGE_SIZE = DataSize.kibibytes(256).toBytes();
+  @VisibleForTesting
+  static final long MAX_MESSAGE_SIZE = DataSize.kibibytes(256).toBytes();
 
   public MessageController(
       RateLimiters rateLimiters,
       MessageSender messageSender,
       ReceiptSender receiptSender,
       AccountsManager accountsManager,
+      DeletedAccountsManager deletedAccountsManager,
       MessagesManager messagesManager,
       ApnFallbackManager apnFallbackManager,
       ReportMessageManager reportMessageManager,
@@ -148,6 +158,7 @@ public class MessageController {
     this.messageSender = messageSender;
     this.receiptSender = receiptSender;
     this.accountsManager = accountsManager;
+    this.deletedAccountsManager = deletedAccountsManager;
     this.messagesManager = messagesManager;
     this.apnFallbackManager = apnFallbackManager;
     this.reportMessageManager = reportMessageManager;
@@ -165,7 +176,7 @@ public class MessageController {
       @HeaderParam("User-Agent") String userAgent,
       @HeaderParam("X-Forwarded-For") String forwardedFor,
       @PathParam("destination") UUID destinationUuid,
-      @Valid IncomingMessageList messages)
+      @NotNull @Valid IncomingMessageList messages)
       throws RateLimitExceededException, RateLimitChallengeException {
 
     if (source.isEmpty() && accessKey.isEmpty()) {
@@ -185,22 +196,15 @@ public class MessageController {
     }
 
     for (final IncomingMessage message : messages.getMessages()) {
+
       int contentLength = 0;
 
       if (!Util.isEmpty(message.getContent())) {
         contentLength += message.getContent().length();
       }
 
-      if (!Util.isEmpty(message.getBody())) {
-        contentLength += message.getBody().length();
-      }
-
-      Metrics.summary(CONTENT_SIZE_DISTRIBUTION_NAME, Tags.of(UserAgentTagUtil.getPlatformTag(userAgent))).record(contentLength);
-
-      if (contentLength > MAX_MESSAGE_SIZE) {
-        Metrics.counter(REJECT_OVERSIZE_MESSAGE_COUNTER, Tags.of(UserAgentTagUtil.getPlatformTag(userAgent))).increment();
-        return Response.status(Response.Status.REQUEST_ENTITY_TOO_LARGE).build();
-      }
+      validateContentLength(contentLength, userAgent);
+      validateEnvelopeType(message.getType(), userAgent);
     }
 
     try {
@@ -218,23 +222,15 @@ public class MessageController {
       OptionalAccess.verify(source.map(AuthenticatedAccount::getAccount), accessKey, destination);
       assert (destination.isPresent());
 
-      if (source.isPresent() && !source.get().getAccount().isIdentifiedBy(destinationUuid)) {
-        final String senderCountryCode = Util.getCountryCode(source.get().getAccount().getNumber());
-
-        try {
-          rateLimiters.getMessagesLimiter().validate(source.get().getAccount().getUuid(), destination.get().getUuid());
-        } catch (final RateLimitExceededException e) {
-          Metrics.counter(RATE_LIMITED_MESSAGE_COUNTER_NAME,
-              SENDER_COUNTRY_TAG_NAME, senderCountryCode,
-              RATE_LIMIT_REASON_TAG_NAME, "singleDestinationRate").increment();
-
-          throw e;
-        }
+      if (source.isPresent() && !isSyncMessage) {
+        checkRateLimit(source.get(), destination.get(), userAgent);
       }
 
-      validateCompleteDeviceList(destination.get(), messages.getMessages(), isSyncMessage,
+      MessageValidation.validateCompleteDeviceList(destination.get(), messages.getMessages(),
+          IncomingMessage::getDestinationDeviceId, isSyncMessage,
           source.map(AuthenticatedAccount::getAuthenticatedDevice).map(Device::getId));
-      validateRegistrationIds(destination.get(), messages.getMessages());
+      MessageValidation.validateRegistrationIds(destination.get(), messages.getMessages(),
+          IncomingMessage::getDestinationDeviceId, IncomingMessage::getDestinationRegistrationId);
 
       final List<Tag> tags = List.of(UserAgentTagUtil.getPlatformTag(userAgent),
           Tag.of(EPHEMERAL_TAG_NAME, String.valueOf(messages.isOnline())),
@@ -245,8 +241,102 @@ public class MessageController {
 
         if (destinationDevice.isPresent()) {
           Metrics.counter(SENT_MESSAGE_COUNTER_NAME, tags).increment();
-          sendMessage(source, destination.get(), destinationDevice.get(), destinationUuid, messages.getTimestamp(),
-              messages.isOnline(), incomingMessage, userAgent);
+          sendMessage(source, destination.get(), destinationDevice.get(), destinationUuid, messages.getTimestamp(), messages.isOnline(), incomingMessage, userAgent);
+        }
+      }
+
+      return Response.ok(new SendMessageResponse(
+          !isSyncMessage && source.isPresent() && source.get().getAccount().getEnabledDeviceCount() > 1)).build();
+    } catch (NoSuchUserException e) {
+      throw new WebApplicationException(Response.status(404).build());
+    } catch (MismatchedDevicesException e) {
+      throw new WebApplicationException(Response.status(409)
+              .type(MediaType.APPLICATION_JSON_TYPE)
+              .entity(new MismatchedDevices(e.getMissingDevices(),
+                      e.getExtraDevices()))
+              .build());
+    } catch (StaleDevicesException e) {
+      throw new WebApplicationException(Response.status(410)
+              .type(MediaType.APPLICATION_JSON)
+              .entity(new StaleDevices(e.getStaleDevices()))
+              .build());
+    }
+  }
+
+  @Timed
+  @Path("/{destination}")
+  @PUT
+  @Consumes(MultiDeviceMessageListProvider.MEDIA_TYPE)
+  @Produces(MediaType.APPLICATION_JSON)
+  @FilterAbusiveMessages
+  public Response sendMultiDeviceMessage(@Auth Optional<AuthenticatedAccount> source,
+      @HeaderParam(OptionalAccess.UNIDENTIFIED) Optional<Anonymous> accessKey,
+      @HeaderParam("User-Agent") String userAgent,
+      @HeaderParam("X-Forwarded-For") String forwardedFor,
+      @PathParam("destination") UUID destinationUuid,
+      @QueryParam("online") boolean online,
+      @QueryParam("ts") long timestamp,
+      @NotNull @Valid IncomingDeviceMessage[] messages)
+      throws RateLimitExceededException {
+
+    if (source.isEmpty() && accessKey.isEmpty()) {
+      throw new WebApplicationException(Response.Status.UNAUTHORIZED);
+    }
+
+    final String senderType;
+
+    if (source.isPresent()) {
+      if (source.get().getAccount().isIdentifiedBy(destinationUuid)) {
+        senderType = SENDER_TYPE_SELF;
+      } else {
+        senderType = SENDER_TYPE_IDENTIFIED;
+      }
+    } else {
+      senderType = SENDER_TYPE_UNIDENTIFIED;
+    }
+
+    for (final IncomingDeviceMessage message : messages) {
+      validateContentLength(message.getContent().length, userAgent);
+      validateEnvelopeType(message.getType(), userAgent);
+    }
+
+    try {
+      boolean isSyncMessage = source.isPresent() && source.get().getAccount().isIdentifiedBy(destinationUuid);
+
+      Optional<Account> destination;
+
+      if (!isSyncMessage) {
+        destination = accountsManager.getByAccountIdentifier(destinationUuid)
+            .or(() -> accountsManager.getByPhoneNumberIdentifier(destinationUuid));
+      } else {
+        destination = source.map(AuthenticatedAccount::getAccount);
+      }
+
+      OptionalAccess.verify(source.map(AuthenticatedAccount::getAccount), accessKey, destination);
+      assert (destination.isPresent());
+
+      if (source.isPresent() && !isSyncMessage) {
+        checkRateLimit(source.get(), destination.get(), userAgent);
+      }
+
+      final List<IncomingDeviceMessage> messagesAsList = Arrays.asList(messages);
+      MessageValidation.validateCompleteDeviceList(destination.get(), messagesAsList,
+          IncomingDeviceMessage::getDeviceId, isSyncMessage,
+          source.map(AuthenticatedAccount::getAuthenticatedDevice).map(Device::getId));
+      MessageValidation.validateRegistrationIds(destination.get(), messagesAsList,
+          IncomingDeviceMessage::getDeviceId,
+          IncomingDeviceMessage::getRegistrationId);
+
+      final List<Tag> tags = List.of(UserAgentTagUtil.getPlatformTag(userAgent),
+          Tag.of(EPHEMERAL_TAG_NAME, String.valueOf(online)),
+          Tag.of(SENDER_TYPE_TAG_NAME, senderType));
+
+      for (final IncomingDeviceMessage message : messages) {
+        Optional<Device> destinationDevice = destination.get().getDevice(message.getDeviceId());
+
+        if (destinationDevice.isPresent()) {
+          Metrics.counter(SENT_MESSAGE_COUNTER_NAME, tags).increment();
+          sendMessage(source, destination.get(), destinationDevice.get(), destinationUuid, timestamp, online, message);
         }
       }
 
@@ -280,7 +370,7 @@ public class MessageController {
       @HeaderParam("X-Forwarded-For") String forwardedFor,
       @QueryParam("online") boolean online,
       @QueryParam("ts") long timestamp,
-      @Valid MultiRecipientMessage multiRecipientMessage) {
+      @NotNull @Valid MultiRecipientMessage multiRecipientMessage) {
 
     Map<UUID, Account> uuidToAccountMap = Arrays.stream(multiRecipientMessage.getRecipients())
         .map(Recipient::getUuid)
@@ -313,8 +403,8 @@ public class MessageController {
       final Set<Pair<Long, Integer>> deviceIdAndRegistrationIdSet = accountToDeviceIdAndRegistrationIdMap.get(account);
       final Set<Long> deviceIds = deviceIdAndRegistrationIdSet.stream().map(Pair::first).collect(Collectors.toSet());
       try {
-        validateCompleteDeviceList(account, deviceIds, false, Optional.empty());
-        validateRegistrationIds(account, deviceIdAndRegistrationIdSet.stream());
+        MessageValidation.validateCompleteDeviceList(account, deviceIds, false, Optional.empty());
+        MessageValidation.validateRegistrationIds(account, deviceIdAndRegistrationIdSet.stream());
       } catch (MismatchedDevicesException e) {
         accountMismatchedDevices.add(new AccountMismatchedDevices(account.getUuid(),
             new MismatchedDevices(e.getMissingDevices(), e.getExtraDevices())));
@@ -440,9 +530,7 @@ public class MessageController {
 
     for (final OutgoingMessageEntity message : messageList.getMessages()) {
       size += message.getContent() == null      ? 0 : message.getContent().length;
-      size += message.getMessage() == null      ? 0 : message.getMessage().length;
       size += Util.isEmpty(message.getSource()) ? 0 : message.getSource().length();
-      size += Util.isEmpty(message.getRelay())  ? 0 : message.getRelay().length();
     }
 
     return size;
@@ -473,11 +561,39 @@ public class MessageController {
 
   @Timed
   @POST
-  @Path("/report/{sourceNumber}/{messageGuid}")
-  public Response reportMessage(@Auth AuthenticatedAccount auth, @PathParam("sourceNumber") String sourceNumber,
+  @Path("/report/{source}/{messageGuid}")
+  public Response reportMessage(@Auth AuthenticatedAccount auth, @PathParam("source") String source,
       @PathParam("messageGuid") UUID messageGuid) {
 
-    reportMessageManager.report(sourceNumber, messageGuid, auth.getAccount().getUuid());
+    final Optional<String> sourceNumber;
+    final Optional<UUID> sourceAci;
+    final Optional<UUID> sourcePni;
+    if (source.startsWith("+")) {
+      sourceNumber = Optional.of(source);
+      final Optional<Account> maybeAccount = accountsManager.getByE164(source);
+      if (maybeAccount.isPresent()) {
+        sourceAci = maybeAccount.map(Account::getUuid);
+        sourcePni = maybeAccount.map(Account::getPhoneNumberIdentifier);
+      } else {
+        sourceAci = deletedAccountsManager.findDeletedAccountAci(source);
+        sourcePni = Optional.ofNullable(accountsManager.getPhoneNumberIdentifier(source));
+      }
+    } else {
+      sourceAci = Optional.of(UUID.fromString(source));
+
+      final Optional<Account> sourceAccount = accountsManager.getByAccountIdentifier(sourceAci.get());
+
+      if (sourceAccount.isEmpty()) {
+        logger.warn("Could not find source: {}", sourceAci.get());
+        sourceNumber = deletedAccountsManager.findDeletedAccountE164(sourceAci.get());
+        sourcePni = sourceNumber.map(accountsManager::getPhoneNumberIdentifier);
+      } else {
+        sourceNumber = sourceAccount.map(Account::getNumber);
+        sourcePni = sourceAccount.map(Account::getPhoneNumberIdentifier);
+      }
+    }
+
+    reportMessageManager.report(sourceNumber, sourceAci, sourcePni, messageGuid, auth.getAccount().getUuid());
 
     return Response.status(Status.ACCEPTED)
         .build();
@@ -493,7 +609,6 @@ public class MessageController {
       String userAgentString)
       throws NoSuchUserException {
     try {
-      Optional<byte[]> messageBody = getMessageBody(incomingMessage);
       Optional<byte[]> messageContent = getMessageContent(incomingMessage);
       Envelope.Builder messageBuilder = Envelope.newBuilder();
 
@@ -530,17 +645,40 @@ public class MessageController {
               .setSourceUuid(authenticatedAccount.getAccount().getUuid().toString())
               .setSourceDevice((int) authenticatedAccount.getAuthenticatedDevice().getId()));
 
-      messageBody.ifPresent(bytes -> {
-        Metrics.counter(LEGACY_MESSAGE_SENT_COUNTER).increment();
-        messageBuilder.setLegacyMessage(ByteString.copyFrom(messageBody.get()));
-      });
-
       messageContent.ifPresent(bytes -> messageBuilder.setContent(ByteString.copyFrom(bytes)));
 
       messageSender.sendMessage(destinationAccount, destinationDevice, messageBuilder.build(), online);
     } catch (NotPushRegisteredException e) {
       if (destinationDevice.isMaster()) throw new NoSuchUserException(e);
       else                              logger.debug("Not registered", e);
+    }
+  }
+
+  private void sendMessage(Optional<AuthenticatedAccount> source, Account destinationAccount, Device destinationDevice,
+      UUID destinationUuid, long timestamp, boolean online, IncomingDeviceMessage message) throws NoSuchUserException {
+    try {
+      Envelope.Builder messageBuilder = Envelope.newBuilder();
+      long serverTimestamp = System.currentTimeMillis();
+
+      messageBuilder
+          .setType(Envelope.Type.forNumber(message.getType()))
+          .setTimestamp(timestamp == 0 ? serverTimestamp : timestamp)
+          .setServerTimestamp(serverTimestamp)
+          .setDestinationUuid(destinationUuid.toString())
+          .setContent(ByteString.copyFrom(message.getContent()));
+
+      source.ifPresent(authenticatedAccount ->
+          messageBuilder.setSource(authenticatedAccount.getAccount().getNumber())
+              .setSourceUuid(authenticatedAccount.getAccount().getUuid().toString())
+              .setSourceDevice((int) authenticatedAccount.getAuthenticatedDevice().getId()));
+
+      messageSender.sendMessage(destinationAccount, destinationDevice, messageBuilder.build(), online);
+    } catch (NotPushRegisteredException e) {
+      if (destinationDevice.isMaster()) {
+        throw new NoSuchUserException(e);
+      } else {
+        logger.debug("Not registered", e);
+      }
     }
   }
 
@@ -577,84 +715,45 @@ public class MessageController {
     }
   }
 
-  @VisibleForTesting
-  public static void validateRegistrationIds(Account account, List<IncomingMessage> messages)
-      throws StaleDevicesException {
-    final Stream<Pair<Long, Integer>> deviceIdAndRegistrationIdStream = messages
-        .stream()
-        .map(message -> new Pair<>(message.getDestinationDeviceId(), message.getDestinationRegistrationId()));
-    validateRegistrationIds(account, deviceIdAndRegistrationIdStream);
-  }
-
-  @VisibleForTesting
-  public static void validateRegistrationIds(Account account, Stream<Pair<Long, Integer>> deviceIdAndRegistrationIdStream)
-      throws StaleDevicesException {
-    final List<Long> staleDevices = deviceIdAndRegistrationIdStream
-        .filter(deviceIdAndRegistrationId -> deviceIdAndRegistrationId.second() > 0)
-        .filter(deviceIdAndRegistrationId -> {
-          Optional<Device> device = account.getDevice(deviceIdAndRegistrationId.first());
-          return device.isPresent() && deviceIdAndRegistrationId.second() != device.get().getRegistrationId();
-        })
-        .map(Pair::first)
-        .collect(Collectors.toList());
-
-    if (!staleDevices.isEmpty()) {
-      throw new StaleDevicesException(staleDevices);
-    }
-  }
-
-  @VisibleForTesting
-  public static void validateCompleteDeviceList(Account account, List<IncomingMessage> messages, boolean isSyncMessage,
-      Optional<Long> authenticatedDeviceId)
-      throws MismatchedDevicesException {
-    Set<Long> messageDeviceIds = messages.stream().map(IncomingMessage::getDestinationDeviceId)
-        .collect(Collectors.toSet());
-    validateCompleteDeviceList(account, messageDeviceIds, isSyncMessage, authenticatedDeviceId);
-  }
-
-  @VisibleForTesting
-  public static void validateCompleteDeviceList(Account account, Set<Long> messageDeviceIds, boolean isSyncMessage,
-      Optional<Long> authenticatedDeviceId)
-      throws MismatchedDevicesException {
-    Set<Long> accountDeviceIds = new HashSet<>();
-
-    List<Long> missingDeviceIds = new LinkedList<>();
-    List<Long> extraDeviceIds = new LinkedList<>();
-
-    for (Device device : account.getDevices()) {
-      if (device.isEnabled() &&
-          !(isSyncMessage && device.getId() == authenticatedDeviceId.get())) {
-        accountDeviceIds.add(device.getId());
-
-        if (!messageDeviceIds.contains(device.getId())) {
-          missingDeviceIds.add(device.getId());
-        }
-      }
-    }
-
-    for (Long deviceId : messageDeviceIds) {
-      if (!accountDeviceIds.contains(deviceId)) {
-        extraDeviceIds.add(deviceId);
-      }
-    }
-
-    if (!missingDeviceIds.isEmpty() || !extraDeviceIds.isEmpty()) {
-      throw new MismatchedDevicesException(missingDeviceIds, extraDeviceIds);
-    }
-  }
-
-  private Optional<byte[]> getMessageBody(IncomingMessage message) {
-    if (Util.isEmpty(message.getBody())) return Optional.empty();
+  private void checkRateLimit(AuthenticatedAccount source, Account destination, String userAgent)
+      throws RateLimitExceededException {
+    final String senderCountryCode = Util.getCountryCode(source.getAccount().getNumber());
 
     try {
-      return Optional.of(Base64.getDecoder().decode(message.getBody()));
-    } catch (IllegalArgumentException e) {
-      logger.debug("Bad B64", e);
-      return Optional.empty();
+      rateLimiters.getMessagesLimiter().validate(source.getAccount().getUuid(), destination.getUuid());
+    } catch (final RateLimitExceededException e) {
+      Metrics.counter(RATE_LIMITED_MESSAGE_COUNTER_NAME,
+          Tags.of(
+              UserAgentTagUtil.getPlatformTag(userAgent),
+              Tag.of(SENDER_COUNTRY_TAG_NAME, senderCountryCode),
+              Tag.of(RATE_LIMIT_REASON_TAG_NAME, "singleDestinationRate"))).increment();
+
+      throw e;
     }
   }
 
-  private Optional<byte[]> getMessageContent(IncomingMessage message) {
+  private void validateContentLength(final int contentLength, final String userAgent) {
+    Metrics.summary(CONTENT_SIZE_DISTRIBUTION_NAME, Tags.of(UserAgentTagUtil.getPlatformTag(userAgent)))
+        .record(contentLength);
+
+    if (contentLength > MAX_MESSAGE_SIZE) {
+      Metrics.counter(REJECT_OVERSIZE_MESSAGE_COUNTER, Tags.of(UserAgentTagUtil.getPlatformTag(userAgent)))
+          .increment();
+      throw new WebApplicationException(Status.REQUEST_ENTITY_TOO_LARGE);
+    }
+
+  }
+
+  private void validateEnvelopeType(final int type, final String userAgent) {
+    if (type == Type.SERVER_DELIVERY_RECEIPT_VALUE) {
+      Metrics.counter(REJECT_INVALID_ENVELOPE_TYPE,
+              Tags.of(UserAgentTagUtil.getPlatformTag(userAgent), Tag.of(ENVELOPE_TYPE_TAG_NAME, String.valueOf(type))))
+          .increment();
+      throw new BadRequestException("reserved envelope type");
+    }
+  }
+
+  public static Optional<byte[]> getMessageContent(IncomingMessage message) {
     if (Util.isEmpty(message.getContent())) return Optional.empty();
 
     try {

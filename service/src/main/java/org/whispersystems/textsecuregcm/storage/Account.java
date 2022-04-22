@@ -1,5 +1,5 @@
 /*
- * Copyright 2013-2021 Signal Messenger, LLC
+ * Copyright 2013-2022 Signal Messenger, LLC
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 package org.whispersystems.textsecuregcm.storage;
@@ -17,13 +17,15 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Predicate;
+import javax.annotation.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.whispersystems.textsecuregcm.auth.AuthenticationCredentials;
 import org.whispersystems.textsecuregcm.auth.StoredRegistrationLock;
 import org.whispersystems.textsecuregcm.entities.AccountAttributes;
+import org.whispersystems.textsecuregcm.storage.Device.DeviceCapabilities;
 import org.whispersystems.textsecuregcm.util.Util;
-import javax.annotation.Nullable;
 
 public class Account {
 
@@ -203,35 +205,45 @@ public class Account {
   }
 
   public boolean isGv1MigrationSupported() {
-    requireNotStale();
-
-    return devices.stream()
-                  .filter(Device::isEnabled)
-                  .allMatch(device -> device.getCapabilities() != null && device.getCapabilities().isGv1Migration());
+    return allEnabledDevicesHaveCapability(DeviceCapabilities::isGv1Migration);
   }
 
   public boolean isSenderKeySupported() {
-    requireNotStale();
-
-    return devices.stream()
-        .filter(Device::isEnabled)
-        .allMatch(device -> device.getCapabilities() != null && device.getCapabilities().isSenderKey());
+    return allEnabledDevicesHaveCapability(DeviceCapabilities::isSenderKey);
   }
 
   public boolean isAnnouncementGroupSupported() {
-    requireNotStale();
-
-    return devices.stream()
-        .filter(Device::isEnabled)
-        .allMatch(device -> device.getCapabilities() != null && device.getCapabilities().isAnnouncementGroup());
+    return allEnabledDevicesHaveCapability(DeviceCapabilities::isAnnouncementGroup);
   }
 
   public boolean isChangeNumberSupported() {
+    return allEnabledDevicesHaveCapability(DeviceCapabilities::isChangeNumber);
+  }
+
+  public boolean isPniSupported() {
+    return allEnabledDevicesHaveCapability(DeviceCapabilities::isPni);
+  }
+
+  public boolean isStoriesSupported() {
     requireNotStale();
 
     return devices.stream()
         .filter(Device::isEnabled)
-        .allMatch(device -> device.getCapabilities() != null && device.getCapabilities().isChangeNumber());
+        // TODO stories capability
+        // .allMatch(device -> device.getCapabilities() != null && device.getCapabilities().isStories());
+        .anyMatch(device -> device.getCapabilities() != null && device.getCapabilities().isStories());
+  }
+
+  public boolean isGiftBadgesSupported() {
+    return allEnabledDevicesHaveCapability(DeviceCapabilities::isGiftBadges);
+  }
+
+  private boolean allEnabledDevicesHaveCapability(Predicate<DeviceCapabilities> predicate) {
+    requireNotStale();
+
+    return devices.stream()
+        .filter(Device::isEnabled)
+        .allMatch(device -> device.getCapabilities() != null && predicate.test(device.getCapabilities()));
   }
 
   public boolean isEnabled() {
@@ -264,12 +276,6 @@ public class Account {
     return count;
   }
 
-  public boolean isRateLimited() {
-    requireNotStale();
-
-    return true;
-  }
-
   public boolean isCanonicallyDiscoverable() {
     requireNotStale();
 
@@ -280,12 +286,6 @@ public class Account {
     requireNotStale();
 
     this.canonicallyDiscoverable = canonicallyDiscoverable;
-  }
-
-  public Optional<String> getRelay() {
-    requireNotStale();
-
-    return Optional.empty();
   }
 
   public void setIdentityKey(String identityKey) {

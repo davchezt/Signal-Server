@@ -144,20 +144,22 @@ class AccountsManagerChangeNumberIntegrationTest {
       ACCOUNTS_DYNAMO_EXTENSION.getDynamoDbClient().createTable(createPhoneNumberIdentifierTableRequest);
     }
 
-    final Accounts accounts = new Accounts(
-        ACCOUNTS_DYNAMO_EXTENSION.getDynamoDbClient(),
-        ACCOUNTS_DYNAMO_EXTENSION.getTableName(),
-        NUMBERS_TABLE_NAME,
-        PNI_ASSIGNMENT_TABLE_NAME,
-        USERNAMES_TABLE_NAME,
-        SCAN_PAGE_SIZE);
-
     {
       @SuppressWarnings("unchecked") final DynamicConfigurationManager<DynamicConfiguration> dynamicConfigurationManager =
           mock(DynamicConfigurationManager.class);
 
       DynamicConfiguration dynamicConfiguration = new DynamicConfiguration();
       when(dynamicConfigurationManager.getConfiguration()).thenReturn(dynamicConfiguration);
+
+      final Accounts accounts = new Accounts(
+          dynamicConfigurationManager,
+          ACCOUNTS_DYNAMO_EXTENSION.getDynamoDbClient(),
+          ACCOUNTS_DYNAMO_EXTENSION.getDynamoDbAsyncClient(),
+          ACCOUNTS_DYNAMO_EXTENSION.getTableName(),
+          NUMBERS_TABLE_NAME,
+          PNI_ASSIGNMENT_TABLE_NAME,
+          USERNAMES_TABLE_NAME,
+          SCAN_PAGE_SIZE);
 
       deletedAccounts = new DeletedAccounts(DELETED_ACCOUNTS_DYNAMO_EXTENSION.getDynamoDbClient(),
           DELETED_ACCOUNTS_DYNAMO_EXTENSION.getTableName(),
@@ -269,6 +271,13 @@ class AccountsManagerChangeNumberIntegrationTest {
 
     assertEquals(Optional.of(existingAccountUuid), deletedAccounts.findUuid(originalNumber));
     assertEquals(Optional.empty(), deletedAccounts.findUuid(secondNumber));
+
+    accountsManager.changeNumber(accountsManager.getByAccountIdentifier(originalUuid).orElseThrow(), originalNumber);
+
+    final Account existingAccount2 = accountsManager.create(secondNumber, "password", null, new AccountAttributes(),
+        new ArrayList<>());
+
+    assertEquals(existingAccountUuid, existingAccount2.getUuid());
   }
 
   @Test

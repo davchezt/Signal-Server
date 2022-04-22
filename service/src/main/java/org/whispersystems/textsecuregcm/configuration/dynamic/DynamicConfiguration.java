@@ -28,10 +28,6 @@ public class DynamicConfiguration {
 
   @JsonProperty
   @Valid
-  private DynamicMessageRateConfiguration messageRate = new DynamicMessageRateConfiguration();
-
-  @JsonProperty
-  @Valid
   private DynamicPaymentsConfiguration payments = new DynamicPaymentsConfiguration();
 
   @JsonProperty
@@ -42,7 +38,8 @@ public class DynamicConfiguration {
   private DynamicTwilioConfiguration twilio = new DynamicTwilioConfiguration();
 
   @JsonProperty
-  private DynamicSignupCaptchaConfiguration signupCaptcha = new DynamicSignupCaptchaConfiguration();
+  @Valid
+  private DynamicCaptchaConfiguration captcha = new DynamicCaptchaConfiguration();
 
   @JsonProperty
   @Valid
@@ -54,6 +51,14 @@ public class DynamicConfiguration {
   @JsonProperty
   @Valid
   private DynamicPushLatencyConfiguration pushLatency = new DynamicPushLatencyConfiguration(Collections.emptyMap());
+
+  @JsonProperty
+  @Valid
+  private DynamicUakMigrationConfiguration uakMigrationConfiguration = new DynamicUakMigrationConfiguration();
+
+  @JsonProperty
+  @Valid
+  private DynamicTurnConfiguration turn = new DynamicTurnConfiguration();
 
   public Optional<DynamicExperimentEnrollmentConfiguration> getExperimentEnrollmentConfiguration(
       final String experimentName) {
@@ -73,10 +78,6 @@ public class DynamicConfiguration {
     return remoteDeprecation;
   }
 
-  public DynamicMessageRateConfiguration getMessageRateConfiguration() {
-    return messageRate;
-  }
-
   public DynamicPaymentsConfiguration getPaymentsConfiguration() {
     return payments;
   }
@@ -94,8 +95,8 @@ public class DynamicConfiguration {
     this.twilio = twilioConfiguration;
   }
 
-  public DynamicSignupCaptchaConfiguration getSignupCaptchaConfiguration() {
-    return signupCaptcha;
+  public DynamicCaptchaConfiguration getCaptchaConfiguration() {
+    return captcha;
   }
 
   public DynamicRateLimitChallengeConfiguration getRateLimitChallengeConfiguration() {
@@ -108,6 +109,12 @@ public class DynamicConfiguration {
 
   public DynamicPushLatencyConfiguration getPushLatencyConfiguration() {
     return pushLatency;
+  }
+
+  public DynamicUakMigrationConfiguration getUakMigrationConfiguration() { return uakMigrationConfiguration; }
+
+  public DynamicTurnConfiguration getTurnConfiguration() {
+    return turn;
   }
 
 }

@@ -6,7 +6,6 @@ package org.whispersystems.textsecuregcm;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.dropwizard.Configuration;
-import io.dropwizard.client.JerseyClientConfiguration;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
@@ -33,10 +32,8 @@ import org.whispersystems.textsecuregcm.configuration.GcpAttachmentsConfiguratio
 import org.whispersystems.textsecuregcm.configuration.MaxDeviceConfiguration;
 import org.whispersystems.textsecuregcm.configuration.MessageCacheConfiguration;
 import org.whispersystems.textsecuregcm.configuration.PaymentsServiceConfiguration;
-import org.whispersystems.textsecuregcm.configuration.PushConfiguration;
 import org.whispersystems.textsecuregcm.configuration.RateLimitsConfiguration;
 import org.whispersystems.textsecuregcm.configuration.RecaptchaConfiguration;
-import org.whispersystems.textsecuregcm.configuration.RecaptchaV2Configuration;
 import org.whispersystems.textsecuregcm.configuration.RedisClusterConfiguration;
 import org.whispersystems.textsecuregcm.configuration.RedisConfiguration;
 import org.whispersystems.textsecuregcm.configuration.RemoteConfigConfiguration;
@@ -46,7 +43,6 @@ import org.whispersystems.textsecuregcm.configuration.SecureStorageServiceConfig
 import org.whispersystems.textsecuregcm.configuration.StripeConfiguration;
 import org.whispersystems.textsecuregcm.configuration.SubscriptionConfiguration;
 import org.whispersystems.textsecuregcm.configuration.TestDeviceConfiguration;
-import org.whispersystems.textsecuregcm.configuration.TurnConfiguration;
 import org.whispersystems.textsecuregcm.configuration.TwilioConfiguration;
 import org.whispersystems.textsecuregcm.configuration.UnidentifiedDeliveryConfiguration;
 import org.whispersystems.textsecuregcm.configuration.VoiceVerificationConfiguration;
@@ -75,11 +71,6 @@ public class WhisperServerConfiguration extends Configuration {
   @Valid
   @JsonProperty
   private TwilioConfiguration twilio;
-
-  @NotNull
-  @Valid
-  @JsonProperty
-  private PushConfiguration push;
 
   @NotNull
   @Valid
@@ -174,17 +165,7 @@ public class WhisperServerConfiguration extends Configuration {
   @Valid
   @NotNull
   @JsonProperty
-  private JerseyClientConfiguration httpClient = new JerseyClientConfiguration();
-
-  @Valid
-  @NotNull
-  @JsonProperty
   private WebSocketConfiguration webSocket = new WebSocketConfiguration();
-
-  @Valid
-  @NotNull
-  @JsonProperty
-  private TurnConfiguration turn;
 
   @Valid
   @NotNull
@@ -210,11 +191,6 @@ public class WhisperServerConfiguration extends Configuration {
   @NotNull
   @JsonProperty
   private RecaptchaConfiguration recaptcha;
-
-  @Valid
-  @NotNull
-  @JsonProperty
-  private RecaptchaV2Configuration recaptchaV2;
 
   @Valid
   @NotNull
@@ -275,8 +251,6 @@ public class WhisperServerConfiguration extends Configuration {
   @JsonProperty
   private AbusiveMessageFilterConfiguration abusiveMessageFilter;
 
-  private Map<String, String> transparentDataIndex = new HashMap<>();
-
   public StripeConfiguration getStripe() {
     return stripe;
   }
@@ -293,10 +267,6 @@ public class WhisperServerConfiguration extends Configuration {
     return recaptcha;
   }
 
-  public RecaptchaV2Configuration getRecaptchaV2Configuration() {
-    return recaptchaV2;
-  }
-
   public VoiceVerificationConfiguration getVoiceVerificationConfiguration() {
     return voiceVerification;
   }
@@ -307,14 +277,6 @@ public class WhisperServerConfiguration extends Configuration {
 
   public TwilioConfiguration getTwilioConfiguration() {
     return twilio;
-  }
-
-  public PushConfiguration getPushConfiguration() {
-    return push;
-  }
-
-  public JerseyClientConfiguration getJerseyClientConfiguration() {
-    return httpClient;
   }
 
   public AwsAttachmentsConfiguration getAwsAttachmentsConfiguration() {
@@ -377,10 +339,6 @@ public class WhisperServerConfiguration extends Configuration {
     return limits;
   }
 
-  public TurnConfiguration getTurnConfiguration() {
-    return turn;
-  }
-
   public GcmConfiguration getGcmConfiguration() {
     return gcm;
   }
@@ -421,10 +379,6 @@ public class WhisperServerConfiguration extends Configuration {
     }
 
     return results;
-  }
-
-  public Map<String, String> getTransparentDataIndex() {
-    return transparentDataIndex;
   }
 
   public SecureBackupServiceConfiguration getSecureBackupServiceConfiguration() {

@@ -4,48 +4,46 @@
  */
 package org.whispersystems.textsecuregcm.entities;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 public class IncomingMessage {
 
   @JsonProperty
-  private int    type;
+  private final int type;
 
   @JsonProperty
-  private String destination;
+  private final String destination;
 
   @JsonProperty
-  private long   destinationDeviceId = 1;
+  private final long destinationDeviceId;
 
   @JsonProperty
-  private int destinationRegistrationId;
+  private final int destinationRegistrationId;
 
   @JsonProperty
-  private String body;
+  private final String content;
 
-  @JsonProperty
-  private String content;
-
-  @JsonProperty
-  private String relay;
-
-  @JsonProperty
-  private long   timestamp; // deprecated
+  @JsonCreator
+  public IncomingMessage(
+      @JsonProperty("id") final int type,
+      @JsonProperty("destination") final String destination,
+      @JsonProperty("destinationDeviceId") final long destinationDeviceId,
+      @JsonProperty("destinationRegistrationId") final int destinationRegistrationId,
+      @JsonProperty("content") final String content) {
+    this.type = type;
+    this.destination = destination;
+    this.destinationDeviceId = destinationDeviceId;
+    this.destinationRegistrationId = destinationRegistrationId;
+    this.content = content;
+  }
 
   public String getDestination() {
     return destination;
   }
 
-  public String getBody() {
-    return body;
-  }
-
   public int getType() {
     return type;
-  }
-
-  public String getRelay() {
-    return relay;
   }
 
   public long getDestinationDeviceId() {

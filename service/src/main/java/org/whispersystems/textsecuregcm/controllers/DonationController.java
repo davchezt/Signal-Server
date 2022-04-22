@@ -35,6 +35,7 @@ import java.util.concurrent.ForkJoinPool.ManagedBlocker;
 import java.util.function.Function;
 import javax.annotation.Nonnull;
 import javax.validation.Valid;
+import javax.validation.constraints.NotNull;
 import javax.ws.rs.Consumes;
 import javax.ws.rs.POST;
 import javax.ws.rs.Path;
@@ -42,11 +43,11 @@ import javax.ws.rs.Produces;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 import javax.ws.rs.core.Response.Status;
-import org.signal.zkgroup.InvalidInputException;
-import org.signal.zkgroup.VerificationFailedException;
-import org.signal.zkgroup.receipts.ReceiptCredentialPresentation;
-import org.signal.zkgroup.receipts.ReceiptSerial;
-import org.signal.zkgroup.receipts.ServerZkReceiptOperations;
+import org.signal.libsignal.zkgroup.InvalidInputException;
+import org.signal.libsignal.zkgroup.VerificationFailedException;
+import org.signal.libsignal.zkgroup.receipts.ReceiptCredentialPresentation;
+import org.signal.libsignal.zkgroup.receipts.ReceiptSerial;
+import org.signal.libsignal.zkgroup.receipts.ServerZkReceiptOperations;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.whispersystems.textsecuregcm.auth.AuthenticatedAccount;
@@ -124,7 +125,7 @@ public class DonationController {
   @Produces({MediaType.APPLICATION_JSON, MediaType.TEXT_PLAIN})
   public CompletionStage<Response> redeemReceipt(
       @Auth final AuthenticatedAccount auth,
-      @Valid final RedeemReceiptRequest request) {
+      @NotNull @Valid final RedeemReceiptRequest request) {
     return CompletableFuture.supplyAsync(() -> {
       ReceiptCredentialPresentation receiptCredentialPresentation;
       try {
@@ -192,7 +193,7 @@ public class DonationController {
   @Path("/authorize-apple-pay")
   @Consumes(MediaType.APPLICATION_JSON)
   @Produces(MediaType.APPLICATION_JSON)
-  public CompletableFuture<Response> getApplePayAuthorization(@Auth AuthenticatedAccount auth, @Valid ApplePayAuthorizationRequest request) {
+  public CompletableFuture<Response> getApplePayAuthorization(@Auth AuthenticatedAccount auth, @NotNull @Valid ApplePayAuthorizationRequest request) {
     if (!supportedCurrencies.contains(request.getCurrency())) {
       return CompletableFuture.completedFuture(Response.status(422).build());
     }

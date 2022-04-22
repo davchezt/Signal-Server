@@ -1,20 +1,9 @@
 package org.whispersystems.textsecuregcm.configuration.dynamic;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
-import org.whispersystems.textsecuregcm.configuration.RateLimitsConfiguration.CardinalityRateLimitConfiguration;
 import org.whispersystems.textsecuregcm.configuration.RateLimitsConfiguration.RateLimitConfiguration;
-import java.time.Duration;
 
 public class DynamicRateLimitsConfiguration {
-
-  @JsonProperty
-  private CardinalityRateLimitConfiguration unsealedSenderNumber = new CardinalityRateLimitConfiguration(100, Duration.ofDays(1));
-
-  @JsonProperty
-  private int unsealedSenderDefaultCardinalityLimit = 100;
-
-  @JsonProperty
-  private int unsealedSenderPermitIncrement = 50;
 
   @JsonProperty
   private RateLimitConfiguration rateLimitReset = new RateLimitConfiguration(2, 2.0 / (60 * 24));
@@ -30,10 +19,6 @@ public class DynamicRateLimitsConfiguration {
 
   @JsonProperty
   private RateLimitConfiguration pushChallengeSuccess = new RateLimitConfiguration(2, 2.0 / (60 * 24));
-
-  public CardinalityRateLimitConfiguration getUnsealedSenderNumber() {
-    return unsealedSenderNumber;
-  }
 
   public RateLimitConfiguration getRateLimitReset() {
     return rateLimitReset;
@@ -53,13 +38,5 @@ public class DynamicRateLimitsConfiguration {
 
   public RateLimitConfiguration getPushChallengeSuccess() {
     return pushChallengeSuccess;
-  }
-
-  public int getUnsealedSenderDefaultCardinalityLimit() {
-    return unsealedSenderDefaultCardinalityLimit;
-  }
-
-  public int getUnsealedSenderPermitIncrement() {
-    return unsealedSenderPermitIncrement;
   }
 }

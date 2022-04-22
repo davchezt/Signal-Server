@@ -1,5 +1,5 @@
 /*
- * Copyright 2013-2021 Signal Messenger, LLC
+ * Copyright 2013-2022 Signal Messenger, LLC
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 package org.whispersystems.textsecuregcm.controllers;
@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import javax.validation.Valid;
+import javax.validation.constraints.NotNull;
 import javax.ws.rs.Consumes;
 import javax.ws.rs.DELETE;
 import javax.ws.rs.GET;
@@ -62,17 +63,16 @@ public class DeviceController {
   private final Map<String, Integer>  maxDeviceConfiguration;
 
   public DeviceController(StoredVerificationCodeManager pendingDevices,
-                          AccountsManager accounts,
-                          MessagesManager messages,
-                          Keys keys,
-                          RateLimiters rateLimiters,
-                          Map<String, Integer> maxDeviceConfiguration)
-  {
-    this.pendingDevices         = pendingDevices;
-    this.accounts               = accounts;
-    this.messages               = messages;
-    this.keys                   = keys;
-    this.rateLimiters           = rateLimiters;
+      AccountsManager accounts,
+      MessagesManager messages,
+      Keys keys,
+      RateLimiters rateLimiters,
+      Map<String, Integer> maxDeviceConfiguration) {
+    this.pendingDevices = pendingDevices;
+    this.accounts = accounts;
+    this.messages = messages;
+    this.keys = keys;
+    this.rateLimiters = rateLimiters;
     this.maxDeviceConfiguration = maxDeviceConfiguration;
   }
 
@@ -150,12 +150,11 @@ public class DeviceController {
   @Path("/{verification_code}")
   @ChangesDeviceEnabledState
   public DeviceResponse verifyDeviceToken(@PathParam("verification_code") String verificationCode,
-                                          @HeaderParam("Authorization") BasicAuthorizationHeader authorizationHeader,
-                                          @HeaderParam("User-Agent") String userAgent,
-                                          @Valid AccountAttributes accountAttributes,
-                                          @Context ContainerRequest containerRequest)
-      throws RateLimitExceededException, DeviceLimitExceededException
-  {
+      @HeaderParam("Authorization") BasicAuthorizationHeader authorizationHeader,
+      @HeaderParam("User-Agent") String userAgent,
+      @NotNull @Valid AccountAttributes accountAttributes,
+      @Context ContainerRequest containerRequest)
+      throws RateLimitExceededException, DeviceLimitExceededException {
 
     String number = authorizationHeader.getUsername();
     String password = authorizationHeader.getPassword();
@@ -164,17 +163,17 @@ public class DeviceController {
 
     Optional<StoredVerificationCode> storedVerificationCode = pendingDevices.getCodeForNumber(number);
 
-    if (!storedVerificationCode.isPresent() || !storedVerificationCode.get().isValid(verificationCode)) {
+    if (storedVerificationCode.isEmpty() || !storedVerificationCode.get().isValid(verificationCode)) {
       throw new WebApplicationException(Response.status(403).build());
     }
 
     Optional<Account> account = accounts.getByE164(number);
 
-    if (!account.isPresent()) {
+    if (account.isEmpty()) {
       throw new WebApplicationException(Response.status(403).build());
     }
 
-    // Normally, the the "do we need to refresh somebody's websockets" listener can do this on its own. In this case,
+    // Normally, the "do we need to refresh somebody's websockets" listener can do this on its own. In this case,
     // we're not using the conventional authentication system, and so we need to give it a hint so it knows who the
     // active user is and what their device states look like.
     AuthEnablementRefreshRequirementProvider.setAccount(containerRequest, account.get());
@@ -225,7 +224,7 @@ public class DeviceController {
   @Timed
   @PUT
   @Path("/capabilities")
-  public void setCapabiltities(@Auth AuthenticatedAccount auth, @Valid DeviceCapabilities capabilities) {
+  public void setCapabiltities(@Auth AuthenticatedAccount auth, @NotNull @Valid DeviceCapabilities capabilities) {
     assert (auth.getAuthenticatedDevice() != null);
     final long deviceId = auth.getAuthenticatedDevice().getId();
     accounts.updateDevice(auth.getAccount(), deviceId, d -> d.setCapabilities(capabilities));
@@ -240,10 +239,14 @@ public class DeviceController {
   private boolean isCapabilityDowngrade(Account account, DeviceCapabilities capabilities, String userAgent) {
     boolean isDowngrade = false;
 
+    // TODO stories capability
+    // isDowngrade |= account.isStoriesSupported() && !capabilities.isStories();
+    isDowngrade |= account.isPniSupported() && !capabilities.isPni();
     isDowngrade |= account.isChangeNumberSupported() && !capabilities.isChangeNumber();
     isDowngrade |= account.isAnnouncementGroupSupported() && !capabilities.isAnnouncementGroup();
     isDowngrade |= account.isSenderKeySupported() && !capabilities.isSenderKey();
     isDowngrade |= account.isGv1MigrationSupported() && !capabilities.isGv1Migration();
+    isDowngrade |= account.isGiftBadgesSupported() && !capabilities.isGiftBadges();
 
     if (account.isGroupsV2Supported()) {
       try {

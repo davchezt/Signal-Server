@@ -14,7 +14,7 @@ import javax.annotation.Nullable;
 import javax.validation.constraints.NotEmpty;
 import javax.validation.constraints.NotNull;
 import org.apache.commons.lang3.StringUtils;
-import org.signal.zkgroup.profiles.ProfileKeyCommitment;
+import org.signal.libsignal.zkgroup.profiles.ProfileKeyCommitment;
 import org.whispersystems.textsecuregcm.util.ExactlySize;
 
 public class CreateProfileRequest {
@@ -29,6 +29,9 @@ public class CreateProfileRequest {
 
   @JsonProperty
   private boolean avatar;
+
+  @JsonProperty
+  private boolean sameAvatar;
 
   @JsonProperty
   @ExactlySize({0, 80})
@@ -57,7 +60,7 @@ public class CreateProfileRequest {
 
   public CreateProfileRequest(
       ProfileKeyCommitment commitment, String version, String name, String aboutEmoji, String about,
-      String paymentAddress, boolean wantsAvatar, List<String> badgeIds) {
+      String paymentAddress, boolean wantsAvatar, boolean sameAvatar, List<String> badgeIds) {
     this.commitment = commitment;
     this.version = version;
     this.name = name;
@@ -65,6 +68,7 @@ public class CreateProfileRequest {
     this.about = about;
     this.paymentAddress = paymentAddress;
     this.avatar = wantsAvatar;
+    this.sameAvatar = sameAvatar;
     this.badgeIds = badgeIds;
   }
 
@@ -80,8 +84,24 @@ public class CreateProfileRequest {
     return name;
   }
 
-  public boolean isAvatar() {
+  public boolean hasAvatar() {
     return avatar;
+  }
+
+  public enum AvatarChange {
+    UNCHANGED,
+    CLEAR,
+    UPDATE;
+  }
+
+  public AvatarChange getAvatarChange() {
+    if (!hasAvatar()) {
+      return AvatarChange.CLEAR;
+    }
+    if (!sameAvatar) {
+      return AvatarChange.UPDATE;
+    }
+    return AvatarChange.UNCHANGED;
   }
 
   public String getAboutEmoji() {

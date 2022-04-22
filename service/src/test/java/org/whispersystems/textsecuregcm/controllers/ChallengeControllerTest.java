@@ -7,6 +7,8 @@ package org.whispersystems.textsecuregcm.controllers;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.reset;
@@ -27,7 +29,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.whispersystems.textsecuregcm.auth.AuthenticatedAccount;
 import org.whispersystems.textsecuregcm.auth.DisabledPermittedAuthenticatedAccount;
 import org.whispersystems.textsecuregcm.limits.RateLimitChallengeManager;
-import org.whispersystems.textsecuregcm.mappers.RetryLaterExceptionMapper;
+import org.whispersystems.textsecuregcm.mappers.RateLimitExceededExceptionMapper;
 import org.whispersystems.textsecuregcm.push.NotPushRegisteredException;
 import org.whispersystems.textsecuregcm.tests.util.AuthHelper;
 import org.whispersystems.textsecuregcm.util.SystemMapper;
@@ -45,7 +47,7 @@ class ChallengeControllerTest {
           Set.of(AuthenticatedAccount.class, DisabledPermittedAuthenticatedAccount.class)))
       .setMapper(SystemMapper.getMapper())
       .setTestContainerFactory(new GrizzlyWebTestContainerFactory())
-      .addResource(new RetryLaterExceptionMapper())
+      .addResource(new RateLimitExceededExceptionMapper())
       .addResource(challengeController)
       .build();
 
@@ -110,7 +112,7 @@ class ChallengeControllerTest {
         .put(Entity.json(recaptchaChallengeJson));
 
     assertEquals(200, response.getStatus());
-    verify(rateLimitChallengeManager).answerRecaptchaChallenge(AuthHelper.VALID_ACCOUNT, "The value of the solved captcha token", "10.0.0.1");
+    verify(rateLimitChallengeManager).answerRecaptchaChallenge(eq(AuthHelper.VALID_ACCOUNT), eq("The value of the solved captcha token"), eq("10.0.0.1"), anyString());
   }
 
   @Test
@@ -124,7 +126,7 @@ class ChallengeControllerTest {
         """;
 
     final Duration retryAfter = Duration.ofMinutes(17);
-    doThrow(new RateLimitExceededException(retryAfter)).when(rateLimitChallengeManager).answerRecaptchaChallenge(any(), any(), any());
+    doThrow(new RateLimitExceededException(retryAfter)).when(rateLimitChallengeManager).answerRecaptchaChallenge(any(), any(), any(), any());
 
     final Response response = EXTENSION.target("/v1/challenge")
         .request()

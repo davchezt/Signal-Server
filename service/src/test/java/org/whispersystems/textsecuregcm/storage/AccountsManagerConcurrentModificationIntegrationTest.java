@@ -1,5 +1,5 @@
 /*
- * Copyright 2013-2021 Signal Messenger, LLC
+ * Copyright 2013-2022 Signal Messenger, LLC
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
@@ -39,6 +39,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.mockito.ArgumentCaptor;
 import org.mockito.stubbing.Answer;
 import org.whispersystems.textsecuregcm.auth.AuthenticationCredentials;
+import org.whispersystems.textsecuregcm.configuration.dynamic.DynamicConfiguration;
 import org.whispersystems.textsecuregcm.entities.AccountAttributes;
 import org.whispersystems.textsecuregcm.entities.SignedPreKey;
 import org.whispersystems.textsecuregcm.push.ClientPresenceManager;
@@ -118,8 +119,14 @@ class AccountsManagerConcurrentModificationIntegrationTest {
       dynamoDbExtension.getDynamoDbClient().createTable(createPhoneNumberIdentifierTableRequest);
     }
 
+    @SuppressWarnings("unchecked") final DynamicConfigurationManager<DynamicConfiguration> dynamicConfigurationManager =
+        mock(DynamicConfigurationManager.class);
+    when(dynamicConfigurationManager.getConfiguration()).thenReturn(new DynamicConfiguration());
+
     accounts = new Accounts(
+        dynamicConfigurationManager,
         dynamoDbExtension.getDynamoDbClient(),
+        dynamoDbExtension.getDynamoDbAsyncClient(),
         dynamoDbExtension.getTableName(),
         NUMBERS_TABLE_NAME,
         PNI_TABLE_NAME,
@@ -182,8 +189,9 @@ class AccountsManagerConcurrentModificationIntegrationTest {
                 random.nextBoolean(), random.nextInt(), signedPreKey, random.nextInt(), random.nextInt(),
                 "testUserAgent-" + random.nextInt(), 0,
                 new Device.DeviceCapabilities(random.nextBoolean(), random.nextBoolean(), random.nextBoolean(),
-                    random.nextBoolean(), random.nextBoolean(), random.nextBoolean(),
-                    random.nextBoolean(), random.nextBoolean(), random.nextBoolean())));
+                    random.nextBoolean(), random.nextBoolean(), random.nextBoolean(), random.nextBoolean(),
+                    random.nextBoolean(), random.nextBoolean(), random.nextBoolean(), random.nextBoolean(),
+                    random.nextBoolean())));
           });
 
       uuid = account.getUuid();
@@ -233,7 +241,7 @@ class AccountsManagerConcurrentModificationIntegrationTest {
     return JsonHelpers.fromJson(redisSetArgumentCapture.getValue(), Account.class);
   }
 
-  private void verifyAccount(final String name, final Account account, final boolean discoverableByPhoneNumber, final String currentProfileVersion, final String identityKey, final byte[] unidentifiedAccessKey, final String pin, final String clientRegistrationLock, final boolean unrestrictedUnidentifiedAcces, final long lastSeen) {
+  private void verifyAccount(final String name, final Account account, final boolean discoverableByPhoneNumber, final String currentProfileVersion, final String identityKey, final byte[] unidentifiedAccessKey, final String pin, final String clientRegistrationLock, final boolean unrestrictedUnidentifiedAccess, final long lastSeen) {
 
     assertAll(name,
         () -> assertEquals(discoverableByPhoneNumber, account.isDiscoverableByPhoneNumber()),
@@ -241,7 +249,7 @@ class AccountsManagerConcurrentModificationIntegrationTest {
         () -> assertEquals(identityKey, account.getIdentityKey()),
         () -> assertArrayEquals(unidentifiedAccessKey, account.getUnidentifiedAccessKey().orElseThrow()),
         () -> assertTrue(account.getRegistrationLock().verify(clientRegistrationLock)),
-        () -> assertEquals(unrestrictedUnidentifiedAcces, account.isUnrestrictedUnidentifiedAccess())
+        () -> assertEquals(unrestrictedUnidentifiedAccess, account.isUnrestrictedUnidentifiedAccess())
     );
   }
 
